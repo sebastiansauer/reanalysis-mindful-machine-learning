@@ -1,0 +1,492 @@
+---
+title: "Re-analysis of the paper 'Mindful machine learning: Using machine learning algorithms to predict the practice of mindfulness'"
+author: "Sebastian Sauer"
+date: "9/27/2019"
+output: 
+  html_document: 
+    df_print: kable
+---
+
+
+# Scope
+
+This is the re-analysis of this paper
+
+Sauer, S., Buettner, R., Heidenreich, T., Lemke, J., Berg, C., & Kurz, C. (2018). 
+Mindful machine learning: Using machine learning algorithms to predict the practice of mindfulness. 
+European Journal of Psychological Assessment, 34(1), 6-13.
+http://dx.doi.org/10.1027/1015-5759/a000312
+
+
+
+# Motive
+
+
+Dr. Florian Pargent contacted me, being the corresponing author of the above mentioned paper, and informed me that he found anerror in our analysis. 
+Specifically, he informed us that the performance measures appear to be based on on the train sample, 
+where the test sample should have been used.
+I agree that such an error, given that it exists, needs correction and warrants investigation.
+In addition, the argument and the analyses provided by Dr. Pargent seems plausible.
+
+
+# Course of analysis
+
+After having checked the original code, I agree with Dr. Pargent notion. Specifically, in each model, the *training* data has been presented, but not the *testing* data as it should have been.
+
+The following code documents the re-analyses that now employs the *testing* data for gauging model performance.
+
+
+# Cautions
+
+The following aspects could not been controlled:
+
+- Package versions
+- R version
+
+
+It seems unlikely though not completely impossible that these factors possibly influence the results. However, we deem the possible influence of those factor negligible.
+
+
+
+# Setup
+
+
+## Init
+
+```{r knitr-setup}
+knitr::opts_chunk$set(
+  comment = "#>",
+  collapse = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  cache = TRUE,
+  results = "hide",
+  out.width = "70%",
+  fig.align = 'center',
+  fig.width = 6,
+  fig.asp = 0.618,  # 1 / phi
+  fig.show = "hold",
+  size = "tiny"
+)
+
+```
+
+```{r libs, message = FALSE}
+library(conflicted)
+library(caret)
+library(tidyverse)
+library(here)
+library(tictoc)
+library(testthat)
+```
+
+
+## Load original data
+
+
+```{r}
+dat <- read_csv(paste0(here::here(),"/original-data/1015-5759_a000312_esm5.csv"))
+```
+
+
+
+
+
+
+
+## Prepare data
+
+
+
+### Set DV to type `factor`
+
+As `caret` will only do classificiton if the outcome is of type factor, we need to convert the outcome variable `practice` to factor.
+
+```{r results = "show"}
+dat2 <- dat %>% 
+  mutate(practice = factor(practice),
+         practice = case_when(
+           practice == "1" ~ "yes",
+           practice == "0" ~ "no"
+         ),
+         practice = factor(practice)) %>% 
+  select(practice, everything()) %>% 
+  select(-X1)
+
+glimpse(dat2)
+```
+
+
+
+### Ensure valide factor levels
+
+The factor levels should be proper R names for some caret models, accoring to [this source](https://www.kaggle.com/c/15-071x-the-analytics-edge-competition-spring-2015/discussion/13964), see also [this SO post](https://stackoverflow.com/questions/18402016/error-when-i-try-to-predict-class-probabilities-in-r-caret).
+
+
+The dependent variable should be of type `factor` and needs valid factor levels [as stated in this SO post](https://stackoverflow.com/questions/18402016/error-when-i-try-to-predict-class-probabilities-in-r-caret).
+Let's check that.
+
+
+```{r results = "show"}
+levels(dat2$practice) <- make.names(levels(factor(dat2$practice)))
+levels(dat2$practice)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+Check that all predictors are metric, and that the DV is of type factor.
+
+Define vector of predictor names:
+
+```{r}
+predictor_names <- c(paste0("fmi", 1:14))
+predictor_names
+```
+
+
+
+Test for correct length:
+
+```{r}
+test_dat2 <- dat2 %>% 
+  map( ~class(.))
+
+expect_length(test_dat2, n = (length(predictor_names) + 1))
+```
+
+
+
+
+
+
+# Training vs test sample
+
+```{r}
+inTraining <- createDataPartition(dat2$practice, p = 0.8, list = FALSE)
+training <- dat2[inTraining, ]
+testing <- dat2[-inTraining, ]
+```
+
+
+
+
+
+
+## Define model list
+
+```{r}
+model_list <- c("glm", "gbm", "qda", "svmLinear", "svmPoly", "rf", "nnet", "ada", "knn", "elm")
+
+n_models <- length(model_list)
+n_models
+```
+
+
+
+
+There are `r n_models` being tested.
+
+
+## Define standard cross-validation scheme
+
+
+```{r}
+fitControl <- trainControl(## 10-fold CV
+    method = "repeatedcv",
+    number = 10,
+    ## repeated ten times
+    repeats = 10)
+```
+
+
+
+## Define data objects for results
+
+
+```{r}
+conf.all <- data.frame(matrix(nrow = 10, ncol = 4))
+names(conf.all) <- c("model", "sensitivity", "specificity", "kappa")
+
+
+model_output <- list()
+
+model_confmatrix <- list()
+```
+
+
+# funs
+
+This function stores the model output in some lists:
+
+
+```{r}
+save_model_output <- function(name, modelOut) {
+  
+  model_confmatrix[[name]] <<- confusionMatrix(predict(modelOut, testing), 
+                                             testing$practice)
+  
+  conf.all[name, ] <<- c(name, model_confmatrix[[name]][c(1,2)], model_confmatrix[[name]]$overall[2])
+  
+}
+```
+
+
+
+
+```{r}
+run_model <- function(model_name, ...){
+  
+  set.seed(42)
+  
+  start_time = Sys.time()
+  
+  modelOut <- train(practice ~ ., 
+                    data = training, 
+                    method = model_name, 
+                    trControl = fitControl,
+                    ...)
+  
+  modelPred <- predict(modelOut, testing)
+  
+  modelConfMatrix <- confusionMatrix(modelPred, testing$practice)
+  
+  end_time = Sys.time()
+  
+  coefs <- list(name = model_name, 
+                sensitivity = modelConfMatrix$byClass[1], 
+                specificity = modelConfMatrix$byClass[2], 
+                accuracy = modelConfMatrix$overall[1],
+                kappa = modelConfMatrix$overall[2],
+                time_taken = end_time - start_time)
+}
+```
+
+
+# Now run the models
+
+
+## Check
+
+
+```{r results = "show"}
+modelOut <- train(practice ~ ., 
+                  data = training, 
+                  method = "glm", 
+                  trControl = fitControl,
+                  family = "binomial")
+
+modelPred <- predict(modelOut, testing)
+  
+modelConfMatrix <- confusionMatrix(modelPred, testing$practice)
+modelConfMatrix
+
+
+modelConfMatrix$byClass[c(1,2)]
+
+modelConfMatrix$overall[c(1,2)]
+```
+
+
+
+## GLM
+```{r}
+model_output[["glm"]] <- run_model("glm", family = "binomial")
+```
+
+
+
+## Boosting
+
+Define different grid to check hyper parameter:
+
+```{r verbose = FALSE, results = "hide"}
+gbmGrid <-  expand.grid(interaction.depth = c(1, 5, 9),
+                        n.trees = 1:30*50,
+                        shrinkage = 0.1,
+                        n.minobsinnode = 10)
+
+model_output[["gbm"]] <- run_model("gbm", tuneGrid = gbmGrid)
+
+```
+
+
+## QDA
+
+
+```{r}
+model_output[["qda"]] <- run_model("qda")
+```
+
+
+## SVM linear
+
+
+
+```{r}
+model_output[["svmLinear"]] <- run_model("svmLinear")
+```
+
+## svmPoly
+
+
+```{r}
+model_output[["svmPoly"]] <- run_model("svmPoly")
+```
+
+
+## rf
+
+
+```{r}
+this_model <- "rf"
+model_output[[this_model]] <- run_model(this_model)
+```
+
+
+## nnet
+
+
+```{r}
+this_model <- "nnet"
+model_output[[this_model]] <- run_model(this_model)
+```
+
+
+## ada
+
+
+
+```{r}
+this_model <- "ada"
+model_output[[this_model]] <- run_model(this_model)
+```
+
+
+
+## knn
+
+
+```{r}
+this_model <- "knn"
+model_output[[this_model]] <- run_model(this_model)
+```
+
+
+
+
+## elm
+
+
+
+```{r}
+this_model <- "elm"
+model_output[[this_model]] <- run_model(this_model)
+```
+
+
+
+
+# Visualize model performance
+
+
+First unnest the list to a data frame
+
+```{r results = "show"}
+model_output_df <- map_df(model_output, ~.) 
+model_output_df
+```
+
+Now spread it into a long format.
+
+```{r}
+model_output_df_long <- model_output_df %>% 
+  gather(key = coefficient, value = value, -c(name, time_taken))
+model_output_df_long
+```
+
+
+
+```{r}
+model_output_df_long %>% 
+  count(coefficient)
+```
+
+
+```{r delete-me, eval = FALSE}
+# delete this code chunk for production. Only for correction during scaffoling! 
+model_output_df_long <- model_output_df_long %>% 
+  mutate(coefficient = ifelse(coefficient == "accuracy", "kappa", coefficient))
+```
+
+## Figure 2 (original paper)
+
+Now plot:
+
+```{r figure2}
+model_output_df_long %>%
+  dplyr::filter(coefficient != "accuracy") %>% 
+  ggplot(aes(x = reorder(name, value), y = value, fill = coefficient)) +
+  geom_col(position = "dodge") +
+  coord_flip() +
+  scale_fill_viridis_d() +
+  theme_light()
+```
+
+
+
+In the original mode, `rf` scores best. In this re-analysis, `rf` scored second-best (measured by Cohen's Kappa in both analyses).
+
+
+## Figure 3
+
+Figure 3 in the original paper computes the average per coefficient across all models, and compares "classical" linear model results with the "machine learning" models.
+
+First compute the summary stats.
+
+```{r}
+model_output_df_sum <- model_output_df_long %>% 
+  mutate(type = ifelse(name == "glm", "classical", "machine learning")) %>% 
+  group_by(type, coefficient) %>% 
+  summarise(cofficient_mean = mean(value))
+
+model_output_df_sum
+```
+
+
+Now plot.
+
+
+```{r}
+model_output_df_sum %>% 
+  ggplot(aes(x = reorder(coefficient, -cofficient_mean), y = cofficient_mean)) +
+  geom_col(position = "dodge", aes(fill = coefficient)) +
+  facet_wrap(~ type) +
+  scale_fill_viridis_d() +
+  theme_light() +
+  labs(y = "value", x = "coefficient") +
+  geom_label(aes(label = round(cofficient_mean, 2), nudge.y = 0))
+```
+
+
+There is no strong difference between classical and machine learning models, seen from an summary perspective. However, a slight advantage may be inferred in favor of the ML model.s
+
+
+# Save output
+
+
+```{r}
+#model_output <- read_rds("reanalysis-objects/model_output.rds")
+write_rds(model_output, "reanalysis-objects/model_output.rds")
+```
+
+
