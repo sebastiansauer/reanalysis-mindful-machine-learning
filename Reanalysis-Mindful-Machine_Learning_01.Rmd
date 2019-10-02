@@ -1,10 +1,11 @@
 ---
 title: "Re-analysis of the paper 'Mindful machine learning: Using machine learning algorithms to predict the practice of mindfulness'"
 author: "Sebastian Sauer"
-date: "9/27/2019"
+date: "`r Sys.Date()`"
 output: 
   html_document: 
     df_print: kable
+    toc: true
 ---
 
 
@@ -31,7 +32,7 @@ In addition, the argument and the analyses provided by Dr. Pargent seems plausib
 
 # Course of analysis
 
-After having checked the original code, I agree with Dr. Pargent notion. Specifically, in each model, the *training* data has been presented, but not the *testing* data as it should have been.
+After having checked the original code, I agree with Dr. Pargent notion. Specifically, in *each model*, the *training* data has been presented, but not the *testing* data as it should have been.
 
 The following code documents the re-analyses that now employs the *testing* data for gauging model performance.
 
@@ -74,17 +75,17 @@ knitr::opts_chunk$set(
 ```{r libs, message = FALSE}
 library(conflicted)
 library(caret)
-library(tidyverse)
 library(here)
 library(tictoc)
 library(testthat)
+library(tidyverse)
 ```
 
 
 ## Load original data
 
 
-```{r}
+```{r read-data}
 dat <- read_csv(paste0(here::here(),"/original-data/1015-5759_a000312_esm5.csv"))
 ```
 
@@ -102,7 +103,7 @@ dat <- read_csv(paste0(here::here(),"/original-data/1015-5759_a000312_esm5.csv")
 
 As `caret` will only do classificiton if the outcome is of type factor, we need to convert the outcome variable `practice` to factor.
 
-```{r results = "show"}
+```{r prep, results = "show"}
 dat2 <- dat %>% 
   mutate(practice = factor(practice),
          practice = case_when(
@@ -110,8 +111,8 @@ dat2 <- dat %>%
            practice == "0" ~ "no"
          ),
          practice = factor(practice)) %>% 
-  select(practice, everything()) %>% 
-  select(-X1)
+  dplyr::select(practice, everything()) %>% 
+  dplyr::select(-X1)
 
 glimpse(dat2)
 ```
@@ -171,7 +172,7 @@ expect_length(test_dat2, n = (length(predictor_names) + 1))
 
 # Training vs test sample
 
-```{r}
+```{r train-test-sample}
 inTraining <- createDataPartition(dat2$practice, p = 0.8, list = FALSE)
 training <- dat2[inTraining, ]
 testing <- dat2[-inTraining, ]
@@ -184,7 +185,7 @@ testing <- dat2[-inTraining, ]
 
 ## Define model list
 
-```{r}
+```{r model-list}
 model_list <- c("glm", "gbm", "qda", "svmLinear", "svmPoly", "rf", "nnet", "ada", "knn", "elm")
 
 n_models <- length(model_list)
@@ -200,7 +201,7 @@ There are `r n_models` being tested.
 ## Define standard cross-validation scheme
 
 
-```{r}
+```{r fitControl}
 fitControl <- trainControl(## 10-fold CV
     method = "repeatedcv",
     number = 10,
@@ -230,6 +231,7 @@ This function stores the model output in some lists:
 
 
 ```{r}
+# delete-me
 save_model_output <- function(name, modelOut) {
   
   model_confmatrix[[name]] <<- confusionMatrix(predict(modelOut, testing), 
@@ -243,7 +245,7 @@ save_model_output <- function(name, modelOut) {
 
 
 
-```{r}
+```{r run-model-fun}
 run_model <- function(model_name, ...){
   
   set.seed(42)
@@ -278,7 +280,7 @@ run_model <- function(model_name, ...){
 ## Check
 
 
-```{r results = "show"}
+```{r check-run-model, results = "show"}
 modelOut <- train(practice ~ ., 
                   data = training, 
                   method = "glm", 
@@ -299,7 +301,7 @@ modelConfMatrix$overall[c(1,2)]
 
 
 ## GLM
-```{r}
+```{r glm}
 model_output[["glm"]] <- run_model("glm", family = "binomial")
 ```
 
@@ -309,7 +311,7 @@ model_output[["glm"]] <- run_model("glm", family = "binomial")
 
 Define different grid to check hyper parameter:
 
-```{r verbose = FALSE, results = "hide"}
+```{r boosting, verbose = FALSE, results = "hide"}
 gbmGrid <-  expand.grid(interaction.depth = c(1, 5, 9),
                         n.trees = 1:30*50,
                         shrinkage = 0.1,
@@ -323,7 +325,7 @@ model_output[["gbm"]] <- run_model("gbm", tuneGrid = gbmGrid)
 ## QDA
 
 
-```{r}
+```{r qda}
 model_output[["qda"]] <- run_model("qda")
 ```
 
@@ -332,14 +334,14 @@ model_output[["qda"]] <- run_model("qda")
 
 
 
-```{r}
+```{r svmlin}
 model_output[["svmLinear"]] <- run_model("svmLinear")
 ```
 
 ## svmPoly
 
 
-```{r}
+```{r svmpoly}
 model_output[["svmPoly"]] <- run_model("svmPoly")
 ```
 
@@ -347,7 +349,7 @@ model_output[["svmPoly"]] <- run_model("svmPoly")
 ## rf
 
 
-```{r}
+```{r rf}
 this_model <- "rf"
 model_output[[this_model]] <- run_model(this_model)
 ```
@@ -366,7 +368,7 @@ model_output[[this_model]] <- run_model(this_model)
 
 
 
-```{r}
+```{r ada}
 this_model <- "ada"
 model_output[[this_model]] <- run_model(this_model)
 ```
@@ -376,7 +378,7 @@ model_output[[this_model]] <- run_model(this_model)
 ## knn
 
 
-```{r}
+```{r knn}
 this_model <- "knn"
 model_output[[this_model]] <- run_model(this_model)
 ```
@@ -388,7 +390,7 @@ model_output[[this_model]] <- run_model(this_model)
 
 
 
-```{r}
+```{r elm}
 this_model <- "elm"
 model_output[[this_model]] <- run_model(this_model)
 ```
@@ -401,14 +403,14 @@ model_output[[this_model]] <- run_model(this_model)
 
 First unnest the list to a data frame
 
-```{r results = "show"}
+```{r model-perform, results = "show"}
 model_output_df <- map_df(model_output, ~.) 
 model_output_df
 ```
 
 Now spread it into a long format.
 
-```{r}
+```{r output-long}
 model_output_df_long <- model_output_df %>% 
   gather(key = coefficient, value = value, -c(name, time_taken))
 model_output_df_long
@@ -416,7 +418,7 @@ model_output_df_long
 
 
 
-```{r}
+```{r check-coeffs}
 model_output_df_long %>% 
   count(coefficient)
 ```
@@ -453,7 +455,7 @@ Figure 3 in the original paper computes the average per coefficient across all m
 
 First compute the summary stats.
 
-```{r}
+```{r model-perform-sum}
 model_output_df_sum <- model_output_df_long %>% 
   mutate(type = ifelse(name == "glm", "classical", "machine learning")) %>% 
   group_by(type, coefficient) %>% 
@@ -466,7 +468,7 @@ model_output_df_sum
 Now plot.
 
 
-```{r}
+```{r figure3}
 model_output_df_sum %>% 
   ggplot(aes(x = reorder(coefficient, -cofficient_mean), y = cofficient_mean)) +
   geom_col(position = "dodge", aes(fill = coefficient)) +
@@ -478,13 +480,31 @@ model_output_df_sum %>%
 ```
 
 
-There is no strong difference between classical and machine learning models, seen from an summary perspective. However, a slight advantage may be inferred in favor of the ML model.s
+There is no strong difference between classical and machine learning models, seen from an summary perspective. However, a slight advantage may be inferred in favor of the ML models. In particular, the best scoring model came from the ML fraction. 
+
+As concluded in the original paper, algorithms do differ in their performance given a particular data set. Analysts should be aware of the variation in the results induced by picking one ore more certain models. 
+
+
+
+# Computation time
+
+
+```{r}
+model_output_df %>%
+  mutate(time = as.numeric(time_taken)) %>% 
+  ggplot(aes(x = reorder(name, time), y = time)) +
+  geom_point(size = 4) +
+  coord_flip() +
+  theme_light() +
+  scale_y_log10() +
+  labs(y = "time in log10", x = "model")
+```
 
 
 # Save output
 
 
-```{r}
+```{r save-output}
 #model_output <- read_rds("reanalysis-objects/model_output.rds")
 write_rds(model_output, "reanalysis-objects/model_output.rds")
 ```
