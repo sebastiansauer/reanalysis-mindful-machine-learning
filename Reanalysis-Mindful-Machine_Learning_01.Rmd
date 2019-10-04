@@ -69,7 +69,6 @@ knitr::opts_chunk$set(
   fig.show = "hold",
   size = "tiny"
 )
-
 ```
 
 ```{r libs, message = FALSE}
@@ -434,7 +433,7 @@ model_output_df_long <- model_output_df_long %>%
 
 Now plot:
 
-```{r figure2}
+```{r figure2, outwidth = "100%"}
 model_output_df_long %>%
   dplyr::filter(coefficient != "accuracy") %>% 
   ggplot(aes(x = reorder(name, value), y = value, fill = coefficient)) +
@@ -468,7 +467,7 @@ model_output_df_sum
 Now plot.
 
 
-```{r figure3}
+```{r figure3, outwidth = "100%"}
 model_output_df_sum %>% 
   ggplot(aes(x = reorder(coefficient, -cofficient_mean), y = cofficient_mean)) +
   geom_col(position = "dodge", aes(fill = coefficient)) +
@@ -497,7 +496,7 @@ model_output_df %>%
   coord_flip() +
   theme_light() +
   scale_y_log10() +
-  labs(y = "time in log10", x = "model")
+  labs(y = "time in log10 [sec]", x = "model")
 ```
 
 
