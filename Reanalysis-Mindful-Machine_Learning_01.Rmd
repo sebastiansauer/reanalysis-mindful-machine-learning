@@ -49,6 +49,13 @@ It seems unlikely though not completely impossible that these factors possibly i
 
 
 
+# Accessibility
+
+
+This code, alongside with the data, can be openly accessed from this repository: https://github.com/sebastiansauer/reanalysis-mindful-machine-learning
+
+
+
 # Setup
 
 
@@ -71,6 +78,8 @@ knitr::opts_chunk$set(
 )
 ```
 
+Load libs:
+
 ```{r libs, message = FALSE}
 library(conflicted)
 library(caret)
@@ -78,14 +87,30 @@ library(here)
 library(tictoc)
 library(testthat)
 library(tidyverse)
+library(drlib)
 ```
+
+
+## Define constants
+
+
+```{r}
+output_filename <- "model_performance.Rds"
+```
+
+
 
 
 ## Load original data
 
 
+
 ```{r read-data}
-dat <- read_csv(paste0(here::here(),"/original-data/1015-5759_a000312_esm5.csv"))
+#dat <- read_csv(paste0(here::here(),"/original-data/1015-5759_a000312_esm5.csv"))
+
+dat_url <- "https://raw.github.com/sebastiansauer/reanalysis-mindful-machine-learning/master/original-data/1015-5759_a000312_esm5.csv"
+
+dat <- read_csv(dat_url)
 ```
 
 
@@ -299,14 +324,47 @@ modelConfMatrix$overall[c(1,2)]
 
 
 
-## GLM
+## Check - GLM
 ```{r glm}
 model_output[["glm"]] <- run_model("glm", family = "binomial")
+
+model_output[["glm"]]
 ```
 
 
 
-## Boosting
+
+
+
+## Loop over models
+
+
+
+
+```{r}
+if (!file.exists(paste0(here(),"/reanalysis-objects/", output_filename))) {
+  time <- Sys.time()
+  model_performance <- model_list %>% 
+    map_dfr(run_model)
+  
+  Sys.time() - time
+} else {cat("Output file already exists. Skipping re-computation. Loading output file.\n")
+  model_performance <- read_rds(paste0(here(),"/reanalysis-objects/", output_filename) )}
+```
+
+
+
+
+## Check results
+
+
+```{r}
+model_performance
+```
+
+
+
+## Own music for Boosting
 
 Define different grid to check hyper parameter:
 
@@ -316,82 +374,26 @@ gbmGrid <-  expand.grid(interaction.depth = c(1, 5, 9),
                         shrinkage = 0.1,
                         n.minobsinnode = 10)
 
-model_output[["gbm"]] <- run_model("gbm", tuneGrid = gbmGrid)
+performance_gbm <- run_model("gbm", tuneGrid = gbmGrid)
+
+
+performance_gbm_df <- flatten(performance_gbm) %>% 
+  as_tibble()
 
 ```
 
 
-## QDA
-
-
-```{r qda}
-model_output[["qda"]] <- run_model("qda")
-```
-
-
-## SVM linear
-
-
-
-```{r svmlin}
-model_output[["svmLinear"]] <- run_model("svmLinear")
-```
-
-## svmPoly
-
-
-```{r svmpoly}
-model_output[["svmPoly"]] <- run_model("svmPoly")
-```
-
-
-## rf
-
-
-```{r rf}
-this_model <- "rf"
-model_output[[this_model]] <- run_model(this_model)
-```
-
-
-## nnet
+Now add the gbm results to the main performance data frame, that is, replace the old values by the new one:
 
 
 ```{r}
-this_model <- "nnet"
-model_output[[this_model]] <- run_model(this_model)
-```
+model_performance2 <- model_performance
 
 
-## ada
+model_performance2[performance_gbm_df$name == model_performance2$name, ] <- performance_gbm_df
 
 
-
-```{r ada}
-this_model <- "ada"
-model_output[[this_model]] <- run_model(this_model)
-```
-
-
-
-## knn
-
-
-```{r knn}
-this_model <- "knn"
-model_output[[this_model]] <- run_model(this_model)
-```
-
-
-
-
-## elm
-
-
-
-```{r elm}
-this_model <- "elm"
-model_output[[this_model]] <- run_model(this_model)
+model_performance2
 ```
 
 
@@ -400,52 +402,57 @@ model_output[[this_model]] <- run_model(this_model)
 # Visualize model performance
 
 
-First unnest the list to a data frame
-
-```{r model-perform, results = "show"}
-model_output_df <- map_df(model_output, ~.) 
-model_output_df
-```
+## Reformat data
 
 Now spread it into a long format.
 
 ```{r output-long}
-model_output_df_long <- model_output_df %>% 
-  gather(key = coefficient, value = value, -c(name, time_taken))
-model_output_df_long
+model_performance_long <- model_performance2 %>% 
+  pivot_longer(cols = sensitivity:kappa, names_to = "coefficient", values_to = "value")
+model_performance_long
 ```
 
 
+## Check
+
+```{r}
+model_performance_long %>% 
+  count(name)
+```
+
+
+Looks good, 4 coefficients per model (name).
+
+
+Similarly,
 
 ```{r check-coeffs}
-model_output_df_long %>% 
+model_performance_long %>% 
   count(coefficient)
 ```
 
 
-```{r delete-me, eval = FALSE}
-# delete this code chunk for production. Only for correction during scaffoling! 
-model_output_df_long <- model_output_df_long %>% 
-  mutate(coefficient = ifelse(coefficient == "accuracy", "kappa", coefficient))
-```
 
 ## Figure 2 (original paper)
 
 Now plot:
 
 ```{r figure2, outwidth = "100%"}
-model_output_df_long %>%
-  dplyr::filter(coefficient != "accuracy") %>% 
-  ggplot(aes(x = reorder(name, value), y = value, fill = coefficient)) +
+model_performance_long %>%
+  #dplyr::filter(coefficient != "accuracy") %>% 
+  ggplot(aes(x = reorder_within(name, value, coefficient), y = value, fill = coefficient)) +
   geom_col(position = "dodge") +
   coord_flip() +
   scale_fill_viridis_d() +
-  theme_light()
+  scale_x_reordered() +
+  theme_light() +
+  labs(x = "model", y = "value") +
+  facet_wrap(~ coefficient, scales = "free")
 ```
 
 
 
-In the original mode, `rf` scores best. In this re-analysis, `rf` scored second-best (measured by Cohen's Kappa in both analyses).
+In the original mode, `rf` scores best. In this re-analysis, `rf` scored third-best (measured by Cohen's Kappa in both analyses).
 
 
 ## Figure 3
@@ -455,7 +462,7 @@ Figure 3 in the original paper computes the average per coefficient across all m
 First compute the summary stats.
 
 ```{r model-perform-sum}
-model_output_df_sum <- model_output_df_long %>% 
+model_output_df_sum <- model_performance_long %>% 
   mutate(type = ifelse(name == "glm", "classical", "machine learning")) %>% 
   group_by(type, coefficient) %>% 
   summarise(cofficient_mean = mean(value))
@@ -475,7 +482,7 @@ model_output_df_sum %>%
   scale_fill_viridis_d() +
   theme_light() +
   labs(y = "value", x = "coefficient") +
-  geom_label(aes(label = round(cofficient_mean, 2), nudge.y = 0))
+  geom_label(aes(label = round(cofficient_mean, 2)))
 ```
 
 
@@ -489,7 +496,7 @@ As concluded in the original paper, algorithms do differ in their performance gi
 
 
 ```{r}
-model_output_df %>%
+model_performance2 %>%
   mutate(time = as.numeric(time_taken)) %>% 
   ggplot(aes(x = reorder(name, time), y = time)) +
   geom_point(size = 4) +
@@ -505,7 +512,7 @@ model_output_df %>%
 
 ```{r save-output}
 #model_output <- read_rds("reanalysis-objects/model_output.rds")
-write_rds(model_output, "reanalysis-objects/model_output.rds")
+write_rds(model_performance, paste0(here(),"/reanalysis-objects/", output_filename))
 ```
 
 
