@@ -96,6 +96,7 @@ library(drlib)
 
 ```{r}
 output_filename <- "model_performance.Rds"
+save_to_disk <- TRUE
 ```
 
 
@@ -194,9 +195,10 @@ expect_length(test_dat2, n = (length(predictor_names) + 1))
 
 
 
-# Training vs test sample
+## Training vs test sample
 
 ```{r train-test-sample}
+set.seed(42)
 inTraining <- createDataPartition(dat2$practice, p = 0.8, list = FALSE)
 training <- dat2[inTraining, ]
 testing <- dat2[-inTraining, ]
@@ -230,7 +232,8 @@ fitControl <- trainControl(## 10-fold CV
     method = "repeatedcv",
     number = 10,
     ## repeated ten times
-    repeats = 10)
+    repeats = 10,
+    savePredictions = "all")
 ```
 
 
@@ -250,23 +253,6 @@ model_confmatrix <- list()
 
 
 # funs
-
-This function stores the model output in some lists:
-
-
-```{r}
-# delete-me
-save_model_output <- function(name, modelOut) {
-  
-  model_confmatrix[[name]] <<- confusionMatrix(predict(modelOut, testing), 
-                                             testing$practice)
-  
-  conf.all[name, ] <<- c(name, model_confmatrix[[name]][c(1,2)], model_confmatrix[[name]]$overall[2])
-  
-}
-```
-
-
 
 
 ```{r run-model-fun}
@@ -301,18 +287,21 @@ run_model <- function(model_name, ...){
 # Now run the models
 
 
-## Check
+## demo run
 
 
-```{r check-run-model, results = "show"}
+```{r check-run-model, results = "hide"}
 modelOut <- train(practice ~ ., 
                   data = training, 
-                  method = "glm", 
-                  trControl = fitControl,
-                  family = "binomial")
+                  method = "rf", 
+                  trControl = fitControl)
 
 modelPred <- predict(modelOut, testing)
-  
+```
+
+Show check results:
+
+```{r}
 modelConfMatrix <- confusionMatrix(modelPred, testing$practice)
 modelConfMatrix
 
@@ -324,12 +313,138 @@ modelConfMatrix$overall[c(1,2)]
 
 
 
-## Check - GLM
-```{r glm}
-model_output[["glm"]] <- run_model("glm", family = "binomial")
 
-model_output[["glm"]]
+
+
+## Check demo run
+
+
+### Candidate model results
+
+Overview:
+
+```{r}
+modelOut
 ```
+
+
+
+Aggregated results for each candidate model (ie., for each hyper parameter configuration):
+
+Note that for each value of mtry, 100 Resamples have been drawn.
+
+```{r}
+modelOut$results
+```
+
+
+As can be seen, the following hyper parameter vales have been tried:
+
+- mtry
+  - 2
+  - 8
+  - 14
+
+  
+  
+3 values, that is yielding 3 candidate models.
+
+
+From the caret [documentation](https://topepo.github.io/caret/model-training-and-tuning.html#model-training-and-parameter-tuning):
+
+>    By default, if p is the number of tuning parameters, the grid size is 3^p
+
+
+
+### Resampling profile
+
+
+```{r}
+plot(modelOut)
+```
+
+
+
+
+```{r}
+trellis.par.set(caretTheme())
+plot(modelOut, metric = "Kappa", plotType = "level",
+     scales = list(x = list(rot = 90)))
+```
+
+
+
+
+### Best candidate model
+
+
+The best candidate model (based on the training data) is this one:
+
+
+```{r}
+modelOut$bestTune
+```
+
+
+
+
+### Details for best candidate model
+
+mtry=2 was the best candidate in the training process.
+
+These are the 100 resamples for this candidate:
+
+```{r}
+modelOut$resample %>% glimpse()
+
+
+modelOut$resample %>% head() %>% knitr::kable()
+```
+
+
+
+Hence the mean accuracy and the mean kappa are:
+
+```{r}
+modelOut$resample %>% 
+  summarise_at(vars(Accuracy, Kappa), list(mean))
+```
+
+These are the values reported above.
+
+
+### Predictions
+
+
+```{r}
+train_pred <- modelOut$pred
+
+train_pred %>% head()
+```
+
+
+How many resamples repetitions? How many candidate models?
+
+```{r}
+train_pred %>% 
+  group_by(mtry, Resample) %>% 
+  summarise(n = n())
+```
+
+
+There are 300 samples being predicted:
+
+- 3 parameters
+- 100 Resample each
+
+yielding 300 samples.
+
+
+
+
+
+
+
 
 
 
@@ -512,7 +627,13 @@ model_performance2 %>%
 
 ```{r save-output}
 #model_output <- read_rds("reanalysis-objects/model_output.rds")
-write_rds(model_performance, paste0(here(),"/reanalysis-objects/", output_filename))
+
+if (save_to_disk) {
+  write_rds(model_performance, paste0(here(),"/reanalysis-objects/", output_filename))
+  write_rds(modelOut, paste0(here(),"/reanalysis-objects/modelOut.rds"))
+  cat("Output data has been saved to disk.\n")
+  cat(paste0("Path: ", paste0(here(), "/reanalysis-objects/\n")))
+}
 ```
 
 

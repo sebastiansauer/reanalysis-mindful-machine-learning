@@ -1,0 +1,422 @@
+---
+title: "Sampling process in the MML paper and in the caret package"
+subtitle: "Comment on Florian Pargent's Github issue from 2019-10-14"
+author: "Ich"
+date: "10/22/2019"
+output: 
+    html_document:
+      number_sections: TRUE
+---
+
+
+# Scope
+
+This is documents summarizes some thoughts to [this Github issue](https://github.com/sebastiansauer/reanalysis-mindful-machine-learning/issues/1) of Florian Pargent from 2019-10-22.
+
+
+
+
+
+# Init
+
+```{r knitr-setup}
+knitr::opts_chunk$set(
+  comment = "#>",
+  collapse = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  cache = TRUE,
+  results = "hide",
+  out.width = "70%",
+  fig.align = 'center',
+  fig.width = 6,
+  fig.asp = 0.618,  # 1 / phi
+  fig.show = "hold",
+  size = "tiny"
+)
+```
+
+Load libs:
+
+```{r libs, message = FALSE}
+library(conflicted)
+library(caret)
+library(here)
+library(tictoc)
+library(testthat)
+library(tidyverse)
+library(drlib)
+library(randomForest)
+```
+
+
+
+
+## Load original data
+
+
+
+```{r read-data}
+#dat <- read_csv(paste0(here::here(),"/original-data/1015-5759_a000312_esm5.csv"))
+
+dat_url <- "https://raw.github.com/sebastiansauer/reanalysis-mindful-machine-learning/master/original-data/1015-5759_a000312_esm5.csv"
+dat <- read_csv(dat_url)
+```
+
+
+
+## Prepare data
+
+
+
+### Set DV to type `factor`
+
+As `caret` will only do classificiton if the outcome is of type factor, we need to convert the outcome variable `practice` to factor.
+
+```{r prep, results = "show"}
+dat2 <- dat %>% 
+  mutate(practice = factor(practice),
+         practice = case_when(
+           practice == "1" ~ "yes",
+           practice == "0" ~ "no"
+         ),
+         practice = factor(practice)) %>% 
+  dplyr::select(practice, everything()) %>% 
+  dplyr::select(-X1)
+
+glimpse(dat2)
+```
+
+
+
+
+
+
+## Training vs test sample
+
+
+```{r train-test-sample}
+set.seed(42)
+inTraining <- createDataPartition(dat2$practice, p = 0.8, list = FALSE)
+training <- dat2[inTraining, ]
+testing <- dat2[-inTraining, ]
+```
+
+
+
+
+
+
+## Define model list
+
+```{r model-list}
+model_list <- c("glm", "gbm", "qda", "svmLinear", "svmPoly", "rf", "nnet", "ada", "knn", "elm")
+
+n_models <- length(model_list)
+n_models
+```
+
+
+
+
+
+
+
+## Define standard cross-validation scheme
+
+
+```{r fitControl}
+fitControl <- trainControl(## 10-fold CV
+    method = "repeatedcv",
+    number = 10,
+    ## repeated ten times
+    repeats = 10,
+    savePredictions = "all")
+```
+
+
+
+
+# demo run
+
+
+```{r check-run-model, results = "hide"}
+modelOut <- train(practice ~ ., 
+                  data = training, 
+                  method = "rf", 
+                  trControl = fitControl)
+```
+
+
+
+
+
+
+
+
+# (Intended) resampling scheme in the paper and in the caret package
+
+As Florian correctly cited, the intended resampling scheme in our paper is this:
+
+>   We employed a more stringent variant known as the repeated k-fold cross-validation procedure (Kuhn, 2008). Here, the data are split into k distinct blocks of similar size. In our case, we split the data into k = 10 blocks and repeated this procedure for n = 10 repetitions. Then, in n runs, each of the k blocks was left out, and the model was fit to the remaining 9/10 of the sample. The model results, built on the “left out” 1/10, were then averaged.
+
+To add, the best model (according to some criterion, here accuracy) was then used to compute predictions on the entire training set.
+
+This is what the caret package does, as stated [here](https://topepo.github.io/caret/model-training-and-tuning.html)
+
+![https://topepo.github.io/caret/premade/TrainAlgo.png]
+
+
+A similar description can be found in Max Kuhn's book (2013) on page 66.
+
+
+Florian goes on:
+
+>    To me, this implies 10 times repeated 10 fold cross-validation for performance evaluation.
+
+
+Yes and no. We (and Max Kuhn's caret) employ an 10 fold cross validation scheme, 10 times repeated, on the *training* data, and for *each* candidate model. By "candidate model" I mean each configuration of hyperparameters.
+
+*But* after having determined the "optimal" hyperparameter set - based on 10*10 cross validation in our case - then a "simple holdout strategy" as stated by Florian is embraced.
+
+Note that we cite Kuhn as the originator of the method employed. 
+
+
+# Hyperparameter tuning
+
+It is correct that we have not detailled on hyperparameter tuning in the original paper. However, we noted that "We used the default values of the statistical procedures" (p. 3). As Florian correctly points out there's some default parameter tuning in caret. To be more precise, this amount to:
+
+
+
+From the caret [documentation](https://topepo.github.io/caret/model-training-and-tuning.html#model-training-and-parameter-tuning):
+
+>    By default, if p is the number of tuning parameters, the grid size is 3^p
+
+
+As there's only one hyperparamter implemented in `rf`, which is `mtry` there have been 3 candidate models assessed (with the mtry values of 2, 8, and 14).
+
+
+
+# Different views on nested sampling
+
+If I got Florian's idea correctly, he proposed to come up with 10x10=100 folds (resamples) of the training set:
+
+
+```{r}
+folds <- createMultiFolds(dat2$practice, k = 10, times = 10) ## 10 rep 10-fold CV for performance evaluation
+```
+
+
+Florian then goes on and computes for each of the 100 folds a 10-times cross-validated model (a random forest `rf` in this case):
+
+```{r}
+inner_res <- trainControl(method = "cv", number = 10) ## 10-fold CV for hyperparameter tuning
+
+mod_list <- lapply(folds, function(x) { # train models for each of the 100 training sets
+  train(practice ~ ., data = dat2[x,], 
+                 method = "rf", 
+                 trControl = inner_res,
+                 verbose = FALSE)
+})
+```
+
+Note that this procedure amounts to 100*10*3 resamples, where 100 is the number of folds, 10 the number of cross-validation resamples, and 3 the number of hyperparameter values (tuning).
+
+This sampling scheme is indeed nested in a complex way. But it is not the way that is brought forward in Kuhns's book (2013), and not the approach we took.
+
+Florian goes then on and computed predictions the for each of the 100 folds, using the *testing* set:
+
+
+```{r}
+pred_list <- mapply(function(x, y) { # compute predictions on each of the 100 test sets
+  predict(x, dat2[-y,])}, 
+  x = mod_list, y = folds)
+```
+
+Computing the performance measures then:
+
+```{r error = TRUE}
+perf_sens_spec_list <- mapply(function(x, y) { # calculate performance measures I
+  confusionMatrix(x, dat2[-y, "practice", drop = TRUE])$byClass[c(1,2)]}, 
+  x = pred_list, y = folds)
+
+perf_accuracy_kappa_list <- mapply(function(x, y) { # calculate performance measures II
+  confusionMatrix(x, dat2[-y, "practice", drop = TRUE])$overall[c(1,2)]}, 
+  x = pred_list, y = folds)
+
+# average performance across the 100 test sets
+mean(perf_sens_spec_list["Sensitivity", ])
+mean(perf_sens_spec_list["Specificity", ])
+mean(perf_accuracy_kappa_list["Accuracy", ])
+mean(perf_accuracy_kappa_list["Kappa", ])
+```
+
+
+
+
+
+
+
+
+
+I think Florian's approach is a good idea, as far as I can tell at the moment. It's just not the approach proposed by Kuhn, and the approach we followed. As far I can say, Kuhn's approach is broadly followed by the community. 
+
+Let me explain the Kuhn approach (which we followed) in more detail:
+
+
+
+# Kuhn's (caret) approach of cross validation and model tuning
+
+## Step 1: devise hyper parameters
+
+
+The hyper parameters of a caret model can be shown like this:
+
+```{r}
+modelOut$results$mtry
+```
+
+The possible hyper parameter of any model included in caret can be lookedup:
+
+```{r}
+modelLookup("rf")
+```
+
+
+Note that *number of trees* is not a hyper parameter, but considered a constant and set to 500 as per default.
+
+
+
+
+## Step 2: resample data for first candidate model
+
+See Kuhn (2013) Chapter 4.3 on details.
+
+The first candidate model is `mtry=2` in this case. As the resampling scheme is 10-repeated 10-fold cross validation, we will get 100 resamples for `mtry==2`.
+
+Note that the model have been computed above.
+
+
+Here's a glimpse on the model output:
+
+
+```{r}
+train_pred <- modelOut$pred
+
+train_pred %>% head()
+```
+
+Let's pluck the mtry=1 data from it:
+
+
+```{r}
+train_pred_mtry2 <- train_pred %>% 
+  dplyr::filter(mtry == 2)
+
+train_pred_mtry2
+```
+
+
+And now let's compute the performance across all resamples.
+
+```{r}
+confusionMatrix(data = train_pred_mtry2$pred, reference = train_pred_mtry2$obs)
+```
+
+It probably not so good to just sum over all models as I just did. Instead, computing the accuracy per model and then averaging, appears to more reasonable. I'm not quite sure how `caret` computes the accuracy, but I strongly assume that it follows the latter approach (otherwise it would be difficult to obtain variation statistics for accuracy).
+
+
+
+
+That's what the summary output of the whole `train` procedure spits out:
+
+```{r}
+modelOut
+```
+
+Well, nearly what the summary output spits out. The difference stems form the fact that caret now takes the *whole* training set to compute the performance.
+
+
+## Step 3: Repeat step 2 for each candidate model
+
+I'm not detailling that for brevity and as it's just the same as above.
+
+## Step 4: Find optimal model
+
+The optimization criterion is `accuracy`:
+
+```{r}
+modelOut$metric
+```
+
+
+The best fit according to `metric` is:
+
+```{r}
+modelOut$bestTune
+```
+
+
+## Step 5: Predict whole training set based on optimal candidate model
+
+Actually, I'm not quite sure what exactly caret does here. I'm even unsure whether this step is important. We already know the optimal hyperparameter set in the training data, so we should go on to predict the test set. But anyhow, here some details on the optimal hyperparameter set and its resamples. 
+
+We now know that `mtry=2` is optimal for the training data at hand.
+
+```{r}
+modelOut$resample %>% 
+  arrange(-Accuracy) %>% 
+  head()
+```
+
+
+
+Mean accuracy:
+
+```{r}
+modelOut$resample %>% 
+  summarise(mean(Accuracy))
+```
+
+That's exactly the same as in the `train_pred_mtry2`:
+
+```{r}
+confusionMatrix(data = train_pred_mtry2$pred, reference = train_pred_mtry2$obs)$table
+```
+
+
+Accuracy, computed by hand, for mtry=2:
+
+```{r}
+conf_m <- confusionMatrix(data = train_pred_mtry2$pred, reference = train_pred_mtry2$obs)$table
+accuracy <- sum(diag(conf_m))/sum(conf_m)
+accuracy
+```
+
+
+
+
+
+## Step 6 Use optimal candidate to predict test set
+
+
+Now we take a "fresh" part of the sample, unknown to the model, and apply the model there, ie., we predict the outcome in the test set using the best candidate model.
+
+
+```{r}
+predicted_values <- predict(modelOut, testing)
+
+
+confusionMatrix(data = predicted_values, reference = testing$practice)
+```
+
+
+# Summary
+
+
+Kuhn's appraoch uses cross-validation for hyperparameter selection, but not for test set performance estimation. It may well be that there exist better approaches - such as the one Florian presented. However, Kuhn's approach is widely followed by practitioners, which might give some credibility to its rationale.
+
+We might had been more explicit in explaining our rationale in that we followed Kuhn's framework as it is also manifesting in his software, caret. I agree that  those who are not wearing a "Kuhn-caret-glasses" may be puzzled or left with open questions. However, we did cite Kuhn as the originator of our rationale and thus made clear that we follow his approach (although there may be better approaches).
+
+
+
