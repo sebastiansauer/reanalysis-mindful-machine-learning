@@ -220,7 +220,7 @@ mod_list <- lapply(folds, function(x) { # train models for each of the 100 train
 })
 ```
 
-Note that this procedure amounts to 100*10*3 resamples, where 100 is the number of folds, 10 the number of cross-validation resamples, and 3 the number of hyperparameter values (tuning).
+Note that this procedure amounts to $100*10*3$ resamples, where 100 is the number of folds, 10 the number of cross-validation resamples, and 3 the number of hyperparameter values (tuning).
 
 This sampling scheme is indeed nested in a complex way. But it is not the way that is brought forward in Kuhns's book (2013), and not the approach we took.
 
@@ -251,6 +251,7 @@ mean(perf_accuracy_kappa_list["Accuracy", ])
 mean(perf_accuracy_kappa_list["Kappa", ])
 ```
 
+For some reason, this code doesn't run on my machine.
 
 
 
