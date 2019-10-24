@@ -97,6 +97,7 @@ library(drlib)
 ```{r}
 output_filename <- "model_performance.Rds"
 save_to_disk <- TRUE
+output_path <- paste0(here::here(),"/reanalysis-objects/")
 ```
 
 
@@ -242,13 +243,7 @@ fitControl <- trainControl(## 10-fold CV
 
 
 ```{r}
-conf.all <- data.frame(matrix(nrow = 10, ncol = 4))
-names(conf.all) <- c("model", "sensitivity", "specificity", "kappa")
-
-
 model_output <- list()
-
-model_confmatrix <- list()
 ```
 
 
@@ -257,26 +252,26 @@ model_confmatrix <- list()
 
 ```{r run-model-fun}
 run_model <- function(model_name, ...){
-  
+
   set.seed(42)
-  
+
   start_time = Sys.time()
-  
-  modelOut <- train(practice ~ ., 
-                    data = training, 
-                    method = model_name, 
+
+  modelOut <- train(practice ~ .,
+                    data = training,
+                    method = model_name,
                     trControl = fitControl,
                     ...)
-  
+
   modelPred <- predict(modelOut, testing)
-  
+
   modelConfMatrix <- confusionMatrix(modelPred, testing$practice)
-  
+
   end_time = Sys.time()
-  
-  coefs <- list(name = model_name, 
-                sensitivity = modelConfMatrix$byClass[1], 
-                specificity = modelConfMatrix$byClass[2], 
+
+  coefs <- list(name = model_name,
+                sensitivity = modelConfMatrix$byClass[1],
+                specificity = modelConfMatrix$byClass[2],
                 accuracy = modelConfMatrix$overall[1],
                 kappa = modelConfMatrix$overall[2],
                 time_taken = end_time - start_time)
@@ -291,9 +286,9 @@ run_model <- function(model_name, ...){
 
 
 ```{r check-run-model, results = "hide"}
-modelOut <- train(practice ~ ., 
-                  data = training, 
-                  method = "rf", 
+modelOut <- train(practice ~ .,
+                  data = training,
+                  method = "rf",
                   trControl = fitControl)
 
 modelPred <- predict(modelOut, testing)
@@ -317,6 +312,13 @@ modelConfMatrix$overall[c(1,2)]
 
 
 ## Check demo run
+
+
+```{r results = "hide", message = "false"}
+dummy <- run_model("gbm")
+str(dummy)
+```
+
 
 
 ### Candidate model results
@@ -635,5 +637,274 @@ if (save_to_disk) {
   cat(paste0("Path: ", paste0(here(), "/reanalysis-objects/\n")))
 }
 ```
+
+
+
+
+
+# NESTED RESAMPLING
+
+
+## Rationale
+
+In this nested cross validation resampling approach, I will put an "outer loop" to the procedure above.
+
+
+That is, the procedure is as follows:
+
+
+1. Define number of subsamples (n folds times r repeats) for cross validation 
+2. Create folds accoring to previous step
+3. For each of the $n*r$ subsamples do
+    1. for each model m (rf, gbm, ...) do
+        1. Find optimal hyperparameters in training set
+        2. predict outcomes in assessment set (within that fold)
+3. Aggregate predictions
+
+
+
+
+## (Re)Write function to compute model and give back performance 
+
+
+```{r fun-run-model-on-subsample }
+run_model_on_subsample <- function(trainsample, testsample, modelname, traincontrol, outcomevariable, ...) {
+  
+  # this functions trains the models from `modellist` on the dataset `trainsample` 
+  # using the resampling scheme `traincontrol`
+  # `testsample` is used for testing
+  # the outcome variable needs be specified too as `outcomevariable`
+  # output: one value for (each coefficient of) predictive accuracy for each model
+  
+  
+  
+  # make sure the outcome variable has the correct name:
+  
+  newoutcomevarname <- "outcome"
+  trainsample <- dplyr::rename(trainsample, {{newoutcomevarname}} := {{outcomevariable}})
+  
+  
+  set.seed(42)
+  
+  start_time = Sys.time()
+
+  cat("Starting training.\n")
+  cat(paste0("Model name is: ", modelname," \n"))
+  
+  modelOut <- train(outcome ~ ., 
+                    data = trainsample, 
+                    method = modelname, 
+                    trControl = traincontrol,
+                    ...)
+  
+  modelPred <- predict(modelOut, testing)
+  
+  modelConfMatrix <- confusionMatrix(modelPred, testing$practice)
+  
+  end_time = Sys.time()
+  
+  coefs <- list(name = modelname, 
+                sensitivity = modelConfMatrix$byClass[1], 
+                specificity = modelConfMatrix$byClass[2], 
+                accuracy = modelConfMatrix$overall[1],
+                kappa = modelConfMatrix$overall[2],
+                time_taken = end_time - start_time)
+  
+  return(coefs)
+  cat("Model results have been returned.\n")
+
+
+}
+
+```
+
+
+
+### Check
+
+```{r results = "show"}
+dummy <- run_model_on_subsample(modelname = "gbm", 
+                                trainsample = training, 
+                                testsample = testing, 
+                                traincontrol = fitControl,
+                                outcomevariable = "practice")
+dummy
+```
+
+
+## Write function for inner loop
+
+
+This function runs `run_model_on_subsample` on each model from `model_list`. It's basically a loop.
+
+
+
+
+
+```{r fun-run-modellist}
+run_modellist <- function(modellist, trainsample, testsample, traincontrol, outcomevariable, outputfilename = NA, ...){
+
+if (is.na(outputfilename)) {
+  time <- Sys.time()
+  model_performance <- modellist %>% 
+    map_dfr( ~ run_model_on_subsample(trainsample = trainsample,
+                                      testsample = testsample,
+                                      traincontrol = traincontrol,
+                                      outcomevariable = outcomevariable, ...))
+  
+  Sys.time() - time
+  
+  return(model_performance)
+  
+  
+  
+} else {cat("Output file already exists. Skipping re-computation. Loading output file.\n")
+  model_performance <- savely(read_rds(output_filename))}
+  
+  
+}
+```
+
+
+
+### Check
+
+```{r}
+
+models <- list(model1 = "glm",
+               model2 = "gbm")
+
+dummy <- models %>% 
+  map_dfr( ~ run_model_on_subsample(trainsample = training,
+                                      testsample = testing,
+                                      traincontrol = fitControl,
+                                      outcomevariable = "practice"))
+dummy
+
+
+#undebug(run_modellist)
+dummy <- run_modellist(modellist = models,
+                       trainsample = training,
+                       testsample = testing,
+                       traincontrol = fitControl,
+                       outcomevariable = "practice")
+dummy
+
+```
+
+
+
+
+
+## Create Folds
+
+Take the *whole* dataset and create folds.
+
+
+### Define number of folds
+
+```{r}
+t <- 2
+k <- 5
+```
+
+
+### Create folds
+
+Now create the folds
+
+```{r}
+folds <- createMultiFolds(dat2$practice, k = k, times = t) ## t rep k-fold CV for performance evaluation
+```
+
+
+How large is one fold and the corrsponding test set?
+
+
+```{r}
+dat2[folds[[1]], ] %>% nrow()
+dat2[-folds[[1]], ] %>% nrow()
+```
+
+
+
+## Outer Loop function
+
+
+1. For each fold
+    1. do the inner loop
+
+
+
+
+```{r fun-run-models-on-all-samples}
+run_models_on_all_subsamples <- function(data, folds, 
+                                         modellist, 
+                                         traincontrol, 
+                                         outcomevariable, ...)
+  
+  
+  {
+  for (i in 1:length(folds)) {
+    
+    cat(paste0("Fold: ",i," \n"))
+    
+    out[[i]] <- run_modellist(modellist = modellist,
+                              trainsample = data[folds[[i]], ],
+                              testsample = data[-folds[[i]], ],
+                              traincontrol = traincontrol,
+                              outcomevariable = outcomevariable)
+  }
+  
+}
+
+
+```
+
+
+
+## Run the whole shabeng
+
+
+```{r run-all-samples}
+out <- list()
+
+out <- run_models_on_all_subsamples(data = dat2,
+                                    folds = folds,
+                                    modellist = model_list,
+                                    traincontrol = fitControl,
+                                    outcomevariable = "practice")
+```
+
+
+
+
+## Reformat list to df
+
+
+```{r}
+out_df <- out %>% 
+  map_dfr( ~ .) %>% 
+  mutate(fold = rep(1:10, 10))
+```
+
+
+
+
+
+## Write to disk
+
+
+```{r}
+write_rds(out, path = paste0(output_path, "model_performance_nested.rds"))
+write_rds(out_df, path = paste0(output_path, "model_performance_nested_df.rds"))
+```
+
+
+
+
+
+
+
 
 
