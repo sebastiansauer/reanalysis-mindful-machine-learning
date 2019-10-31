@@ -700,7 +700,11 @@ run_model_on_subsample <- function(trainsample, testsample, modelname, traincont
                     trControl = traincontrol,
                     ...)
   
+<<<<<<< HEAD
   modelPred <- predict(modelOut, testsample)  # use *test* sample for model performance/predciton
+=======
+  modelPred <- predict(modelOut, testing)  # use *test* sample for model performance/predciton
+>>>>>>> 0b12279eb85a62c6f7f5d1559ffe32e63a3449b5
   
   modelConfMatrix <- confusionMatrix(modelPred, testsample$outcome)
   
@@ -865,6 +869,7 @@ run_models_on_all_subsamples <- function(data,
                                          modellist, 
                                          traincontrol, 
                                          outcomevariable, ...) {
+
   
   # this functions computes the specified models in `modellist` on all `subsamplies` 
   # output: list of length according to the number of subsamples. 
@@ -978,6 +983,7 @@ out_gbm_df
 
 ## Replace gbm with correct tuning grid runs
 
+
 ```{r}
 out2 <- out_df
 
@@ -988,11 +994,30 @@ out2 %>%
 ```
 
 
+Now plot.
+
+
+```{r figure3, outwidth = "100%"}
+model_output_df_sum %>% 
+  ggplot(aes(x = reorder(coefficient, -cofficient_mean), y = cofficient_mean)) +
+  geom_col(position = "dodge", aes(fill = coefficient)) +
+  facet_wrap(~ type) +
+  scale_fill_viridis_d() +
+  theme_light() +
+  labs(y = "value", x = "coefficient") +
+  geom_label(aes(label = round(cofficient_mean, 2)))
+```
+
+
+There is no strong difference between classical and machine learning models, seen from an summary perspective. However, a slight advantage may be inferred in favor of the ML models. In particular, the best scoring model came from the ML fraction. 
+
+As concluded in the original paper, algorithms do differ in their performance given a particular data set. Analysts should be aware of the variation in the results induced by picking one ore more certain models. 
 
 
 
 
 
+# Computation time
 
 # Visualize model performance of NESTED resampling scheme
 
@@ -1000,6 +1025,7 @@ out2 %>%
 ## Reformat data
 
 Now spread it into a long format.
+
 
 ```{r output-long}
 model_performance2_long <- out2 %>% 
