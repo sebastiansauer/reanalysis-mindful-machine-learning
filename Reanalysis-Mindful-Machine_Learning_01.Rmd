@@ -255,9 +255,9 @@ model_output <- list()
 ```{r run-model-fun}
 run_model <- function(model_name, 
                       training = training, 
-                      testing = testing,...){
+                      testing = testing, ...){
 
-  set.seed(42)
+  #set.seed(42)
 
   start_time = Sys.time()
 
@@ -267,7 +267,7 @@ run_model <- function(model_name,
                     trControl = fitControl,
                     ...)
 
-  modelPred <- predict(modelOut, testing)
+  modelPred <- predict(modelOut, testing, na.action = na.pas)
 
   modelConfMatrix <- confusionMatrix(modelPred, testing$practice)
 
@@ -700,12 +700,9 @@ run_model_on_subsample <- function(trainsample, testsample, modelname, traincont
                     trControl = traincontrol,
                     ...)
   
-<<<<<<< HEAD
+
   modelPred <- predict(modelOut, testsample)  # use *test* sample for model performance/predciton
-=======
-  modelPred <- predict(modelOut, testing)  # use *test* sample for model performance/predciton
->>>>>>> 0b12279eb85a62c6f7f5d1559ffe32e63a3449b5
-  
+
   modelConfMatrix <- confusionMatrix(modelPred, testsample$outcome)
   
   end_time = Sys.time()
@@ -753,7 +750,7 @@ run_modellist <- function(modellist, trainsample, testsample, traincontrol, outc
 
 if (is.na(outputfilename)) {
   time <- Sys.time()
-  model_performance <- modellist %>% 
+  model_performance_nested <- modellist %>% 
     map_dfr( ~ run_model_on_subsample(trainsample = trainsample,
                                       testsample = testsample,
                                       traincontrol = traincontrol,
@@ -761,13 +758,18 @@ if (is.na(outputfilename)) {
   
   Sys.time() - time
   
-  return(model_performance)
+  return(model_performance_nested)
   
   
   
-} else {cat("Output file already exists. Skipping re-computation. Loading output file.\n")
-  model_performance <- savely(read_rds(output_filename))}
-  
+} else {
+  if (recompute_it == FALSE){
+    cat("Output file already exists. Skipping re-computation.\n")
+    out_file <- paste0(output_path, output_filename_nested)
+    cat("Loading this output file: ", out_file, "\n")
+    model_performance_nested <- read_rds(out_file)
+    }
+  }
   
 }
 ```
@@ -826,6 +828,7 @@ The whole number of subsmaples is $t * k$.
 Now create the subsamples
 
 ```{r}
+set.seed(42)
 subsamples <- createMultiFolds(dat2$practice, k = k, times = t) ## t rep k-fold CV for performance evaluation
 ```
 
@@ -942,16 +945,6 @@ out_df <- out %>%
 
 
 
-## Write to disk
-
-
-```{r write-main-out-to-disk}
-if (save_to_disk == TRUE){
-  write_rds(out, path = paste0(output_path, output_filename_nested))
-  write_rds(out_df, path = paste0(output_path, "model_performance_nested_df.rds"))
-}
-```
-
 
 
 ## Run models with alternative search grid (gbm)
@@ -959,14 +952,41 @@ if (save_to_disk == TRUE){
 In the original papeer, GBM uses its own search grid for hyperparamters, so we run the main function for this model again:
 
 
-```{r again-for-fbm}
-out_gbm <- run_models_on_all_subsamples(data = dat2,
-                                        subsamples = subsamples,
-                                        modellist = "gbm",
-                                        traincontrol = fitControl,
-                                        outcomevariable = "practice",
-                                        tuneGrid = gbmGrid)
+```{r again-for-gbm}
+if ((recompute_it == FALSE) &&  !exists("out_gbm")){
+  
+  gbmGrid <-  expand.grid(interaction.depth = c(1, 5, 9),
+                        n.trees = 1:30*50,
+                        shrinkage = 0.1,
+                        n.minobsinnode = 10)
+  
+  out_gbm <- run_models_on_all_subsamples(data = dat2,
+                                          subsamples = subsamples,
+                                          modellist = "gbm",
+                                          traincontrol = fitControl,
+                                          outcomevariable = "practice",
+                                          tuneGrid = gbmGrid)
+} else {
+  cat("The object out_gbm did exists. Skipping recomputation. Set recompute_it to FALSE to change this behavior.\n")
+}
+
+
 ```
+
+
+
+## Write to disk
+
+
+```{r write-main-out-to-disk}
+if (save_to_disk == TRUE){
+  write_rds(out, path = paste0(output_path, output_filename_nested))
+  write_rds(out_df, path = paste0(output_path, "model_performance_nested_df.rds"))
+  write_rds(out_gbm, path = paste0(output_path, "model_performance_gbm_nested.rds"))
+}
+```
+
+
 
 
 
@@ -994,19 +1014,6 @@ out2 %>%
 ```
 
 
-Now plot.
-
-
-```{r figure3, outwidth = "100%"}
-model_output_df_sum %>% 
-  ggplot(aes(x = reorder(coefficient, -cofficient_mean), y = cofficient_mean)) +
-  geom_col(position = "dodge", aes(fill = coefficient)) +
-  facet_wrap(~ type) +
-  scale_fill_viridis_d() +
-  theme_light() +
-  labs(y = "value", x = "coefficient") +
-  geom_label(aes(label = round(cofficient_mean, 2)))
-```
 
 
 There is no strong difference between classical and machine learning models, seen from an summary perspective. However, a slight advantage may be inferred in favor of the ML models. In particular, the best scoring model came from the ML fraction. 
@@ -1015,7 +1022,9 @@ As concluded in the original paper, algorithms do differ in their performance gi
 
 
 
+## Caveat
 
+The subsamples within one fold are not independent, eg. repetitions 1-3 of fold 1 are correlated. Computing SE and even SD may be misleading. This aspect is not (yet) accounted for.
 
 # Computation time
 
@@ -1044,7 +1053,7 @@ model_performance2_long %>%
 ```
 
 
-Looks good, 60 rows, ie 15 subsamples by 4 coefficients per model.
+Looks good, 60 rows per model, ie 15 subsamples by 4 coefficients per model.
 
 
 Similarly,
@@ -1064,7 +1073,7 @@ Now plot:
 model_performance2_long %>%
   #dplyr::filter(coefficient != "accuracy") %>% 
   ggplot(aes(x = reorder_within(name, value, coefficient), y = value)) +
-  geom_jitter(aes(color = name)) +
+  geom_boxplot(aes(color = name)) +
   coord_flip() +
   scale_fill_viridis_d() +
   scale_x_reordered() +
@@ -1085,12 +1094,13 @@ Figure 3 in the original paper computes the average per coefficient across all m
 First compute the summary stats.
 
 ```{r model-perform-sum}
-model_output_df_sum <- model_performance_long %>% 
+model_output2_df_sum <- model_performance2_long %>% 
   mutate(type = ifelse(name == "glm", "classical", "machine learning")) %>% 
   group_by(type, coefficient) %>% 
-  summarise(cofficient_mean = mean(value))
+  summarise(coefficient_mean = mean(value),
+            coefficient_sd = sd(value))
 
-model_output_df_sum
+model_output2_df_sum
 ```
 
 
@@ -1098,14 +1108,15 @@ Now plot.
 
 
 ```{r figure3, outwidth = "100%"}
-model_output_df_sum %>% 
-  ggplot(aes(x = reorder(coefficient, -cofficient_mean), y = cofficient_mean)) +
-  geom_col(position = "dodge", aes(fill = coefficient)) +
+model_output2_df_sum %>% 
+  ggplot(aes(x = reorder(coefficient, -coefficient_mean), y = coefficient_mean)) +
+  geom_errorbar(aes(ymin = coefficient_mean - coefficient_sd,
+                    ymax = coefficient_mean + coefficient_sd)) +
+  geom_point() +
   facet_wrap(~ type) +
   scale_fill_viridis_d() +
   theme_light() +
-  labs(y = "value", x = "coefficient") +
-  geom_label(aes(label = round(cofficient_mean, 2)))
+  labs(y = "value", x = "coefficient") 
 ```
 
 
@@ -1119,10 +1130,10 @@ As concluded in the original paper, algorithms do differ in their performance gi
 
 
 ```{r}
-model_performance2 %>%
+out_df %>%
   mutate(time = as.numeric(time_taken)) %>% 
   ggplot(aes(x = reorder(name, time), y = time)) +
-  geom_point(size = 4) +
+  geom_point(size = 2) +
   coord_flip() +
   theme_light() +
   scale_y_log10() +
