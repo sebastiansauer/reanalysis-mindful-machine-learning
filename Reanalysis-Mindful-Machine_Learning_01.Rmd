@@ -81,7 +81,7 @@ knitr::opts_chunk$set(
 Load libs:
 
 ```{r libs, message = FALSE}
-library(conflicted)
+#library(conflicted)
 library(caret)
 library(here)
 library(tictoc)
@@ -96,8 +96,10 @@ library(drlib)
 
 ```{r}
 output_filename <- "model_performance.Rds"
-save_to_disk <- TRUE
+save_to_disk <- FALSE
 output_path <- paste0(here::here(),"/reanalysis-objects/")
+output_filename_nested <- "model_performance_nested.rds"
+recompute_it <- FALSE
 ```
 
 
@@ -108,8 +110,6 @@ output_path <- paste0(here::here(),"/reanalysis-objects/")
 
 
 ```{r read-data}
-#dat <- read_csv(paste0(here::here(),"/original-data/1015-5759_a000312_esm5.csv"))
-
 dat_url <- "https://raw.github.com/sebastiansauer/reanalysis-mindful-machine-learning/master/original-data/1015-5759_a000312_esm5.csv"
 
 dat <- read_csv(dat_url)
@@ -214,6 +214,8 @@ testing <- dat2[-inTraining, ]
 
 ```{r model-list}
 model_list <- c("glm", "gbm", "qda", "svmLinear", "svmPoly", "rf", "nnet", "ada", "knn", "elm")
+model_list <- set_names(model_list, paste0("model", 1:length(model_list)))
+model_list
 
 n_models <- length(model_list)
 n_models
@@ -251,7 +253,9 @@ model_output <- list()
 
 
 ```{r run-model-fun}
-run_model <- function(model_name, ...){
+run_model <- function(model_name, 
+                      training = training, 
+                      testing = testing,...){
 
   set.seed(42)
 
@@ -697,7 +701,7 @@ run_model_on_subsample <- function(trainsample, testsample, modelname, traincont
                     trControl = traincontrol,
                     ...)
   
-  modelPred <- predict(modelOut, testing)
+  modelPred <- predict(modelOut, testing)  # use *test* sample for model performance/predciton
   
   modelConfMatrix <- confusionMatrix(modelPred, testing$practice)
   
@@ -790,90 +794,133 @@ dummy <- run_modellist(modellist = models,
                        outcomevariable = "practice")
 dummy
 
+
+
 ```
 
 
 
 
 
-## Create Folds
-
-Take the *whole* dataset and create folds.
+## Define subsamples
 
 
-### Define number of folds
+
+### Define number of subsamples
+
+Take the *whole* dataset and create subsamples
+
 
 ```{r}
-t <- 2
-k <- 5
+t <- 3  # times repeated
+k <- 5  # number of folds
 ```
 
+The whole number of subsmaples is $t * k$.
 
-### Create folds
+### Create subsamples
 
-Now create the folds
+Now create the subsamples
 
 ```{r}
-folds <- createMultiFolds(dat2$practice, k = k, times = t) ## t rep k-fold CV for performance evaluation
+subsamples <- createMultiFolds(dat2$practice, k = k, times = t) ## t rep k-fold CV for performance evaluation
 ```
 
+How many subsamples in total?
+
+```{r}
+length(subsamples)
+```
+
+
+### Check
 
 How large is one fold and the corrsponding test set?
 
 
 ```{r}
-dat2[folds[[1]], ] %>% nrow()
-dat2[-folds[[1]], ] %>% nrow()
+check_train <- dat2[subsamples[[1]], ] 
+check_test <- dat2[-subsamples[[1]], ]
+
+nrow(check_train)
+nrow(check_test)
 ```
+
+
+By definition/by virtue of this method, the two check samples (check_train/check_test) will consist of completely cases, the union set will be empty.
 
 
 
 ## Outer Loop function
 
 
-1. For each fold
+1. For each subsample
     1. do the inner loop
 
 
 
 
 ```{r fun-run-models-on-all-samples}
-run_models_on_all_subsamples <- function(data, folds, 
+run_models_on_all_subsamples <- function(data, 
+                                         subsamples, 
                                          modellist, 
                                          traincontrol, 
-                                         outcomevariable, ...)
+                                         outcomevariable, ...) {
   
+  # this functions computes the specified models in `modellist` on all `subsamplies` 
+  # output: list of length according to the number of subsamples. 
+  #   Each list element is a df with the performance indicators, 
+  #   where a row is a model and a col is a coefficient.
   
-  {
-  for (i in 1:length(folds)) {
+  cat(paste0("Number of subsamples to be processed: ", length(subsamples), " .\n"))
+  cat(paste0("Model list: ", modellist, ".\n"))
+  
+  for (i in 1:length(subsamples)) {
     
-    cat(paste0("Fold: ",i," \n"))
+    cat(paste0("subsample: ",i," \n"))
     
     out[[i]] <- run_modellist(modellist = modellist,
-                              trainsample = data[folds[[i]], ],
-                              testsample = data[-folds[[i]], ],
+                              trainsample = data[subsamples[[i]], ],
+                              testsample = data[-subsamples[[i]], ],
                               traincontrol = traincontrol,
-                              outcomevariable = outcomevariable)
+                              outcomevariable = outcomevariable, ...)
+    
+    out[[i]] <- out[[i]] %>% 
+      mutate(subsample = names(subsamples)[[i]])
+    
   }
   
+   return(out)
 }
-
 
 ```
 
 
 
-## Run the whole shabeng
+
+## Run the whole shebang
 
 
-```{r run-all-samples}
-out <- list()
+```{r run-all-samples, cache = TRUE, results = "hide", message = "FALSE"}
 
-out <- run_models_on_all_subsamples(data = dat2,
-                                    folds = folds,
-                                    modellist = model_list,
-                                    traincontrol = fitControl,
-                                    outcomevariable = "practice")
+
+if (!file.exists(paste0(output_path, output_filename_nested)) || recompute_it == TRUE){
+  
+  cat("Starting the main computation\n")
+  
+  out <- list()
+  out <- run_models_on_all_subsamples(data = dat2,
+                                      subsamples = subsamples,
+                                      modellist = model_list,
+                                      traincontrol = fitControl,
+                                      outcomevariable = "practice")
+} else {
+  cat("Output file for nested corss validation exists. I'll just load it.\n")
+  out <- read_rds(paste0(output_path, output_filename_nested))
+}
+
+
+
 ```
 
 
@@ -882,10 +929,9 @@ out <- run_models_on_all_subsamples(data = dat2,
 ## Reformat list to df
 
 
-```{r}
+```{r list-to-dfr}
 out_df <- out %>% 
-  map_dfr( ~ .) %>% 
-  mutate(fold = rep(1:10, 10))
+  map_dfr( ~ .) 
 ```
 
 
@@ -895,9 +941,51 @@ out_df <- out %>%
 ## Write to disk
 
 
+```{r write-main-out-to-disk}
+if (save_to_disk == TRUE){
+  write_rds(out, path = paste0(output_path, output_filename_nested))
+  write_rds(out_df, path = paste0(output_path, "model_performance_nested_df.rds"))
+}
+```
+
+
+
+## Run models with alternative search grid (gbm)
+
+In the original papeer, GBM uses its own search grid for hyperparamters, so we run the main function for this model again:
+
+
+```{r again-for-fbm}
+out_gbm <- run_models_on_all_subsamples(data = dat2,
+                                        subsamples = subsamples,
+                                        modellist = "gbm",
+                                        traincontrol = fitControl,
+                                        outcomevariable = "practice",
+                                        tuneGrid = gbmGrid)
+```
+
+
+
+
+```{r list-to-dfr}
+out_gbm_df <- out_gbm %>% 
+  map_dfr( ~ .) 
+
+
+out_gbm_df
+```
+
+
+
+## Replace gbm with correct tuning grid runs
+
 ```{r}
-write_rds(out, path = paste0(output_path, "model_performance_nested.rds"))
-write_rds(out_df, path = paste0(output_path, "model_performance_nested_df.rds"))
+out2 <- out_df
+
+out2[out2$name == "gbm", ] <- out_gbm_df
+
+out2 %>% 
+  filter(name == "gbm")
 ```
 
 
@@ -907,4 +995,111 @@ write_rds(out_df, path = paste0(output_path, "model_performance_nested_df.rds"))
 
 
 
+# Visualize model performance of NESTED resampling scheme
 
+
+## Reformat data
+
+Now spread it into a long format.
+
+```{r output-long}
+model_performance2_long <- out2 %>% 
+  pivot_longer(cols = sensitivity:kappa, names_to = "coefficient", values_to = "value")
+model_performance2_long
+```
+
+10 models by 15 subsamples by 4 coefficeints equals 600.
+
+
+## Check
+
+```{r}
+model_performance2_long %>% 
+  count(name)
+```
+
+
+Looks good, 60 rows, ie 15 subsamples by 4 coefficients per model.
+
+
+Similarly,
+
+```{r check-coeffs}
+model_performance2_long %>% 
+  count(coefficient)
+```
+
+
+
+## Figure 2 (original paper)
+
+Now plot:
+
+```{r figure2, outwidth = "100%"}
+model_performance2_long %>%
+  #dplyr::filter(coefficient != "accuracy") %>% 
+  ggplot(aes(x = reorder_within(name, value, coefficient), y = value)) +
+  geom_jitter(aes(color = name)) +
+  coord_flip() +
+  scale_fill_viridis_d() +
+  scale_x_reordered() +
+  theme_light() +
+  labs(x = "model", y = "value", coefficient = "", color = "model name") +
+  facet_wrap(~ coefficient, scales = "free")
+```
+
+
+
+In the original mode, `rf` scores best. In this re-analysis, `rf` scored third-best (measured by Cohen's Kappa in both analyses).
+
+
+## Figure 3
+
+Figure 3 in the original paper computes the average per coefficient across all models, and compares "classical" linear model results with the "machine learning" models.
+
+First compute the summary stats.
+
+```{r model-perform-sum}
+model_output_df_sum <- model_performance_long %>% 
+  mutate(type = ifelse(name == "glm", "classical", "machine learning")) %>% 
+  group_by(type, coefficient) %>% 
+  summarise(cofficient_mean = mean(value))
+
+model_output_df_sum
+```
+
+
+Now plot.
+
+
+```{r figure3, outwidth = "100%"}
+model_output_df_sum %>% 
+  ggplot(aes(x = reorder(coefficient, -cofficient_mean), y = cofficient_mean)) +
+  geom_col(position = "dodge", aes(fill = coefficient)) +
+  facet_wrap(~ type) +
+  scale_fill_viridis_d() +
+  theme_light() +
+  labs(y = "value", x = "coefficient") +
+  geom_label(aes(label = round(cofficient_mean, 2)))
+```
+
+
+There is no strong difference between classical and machine learning models, seen from an summary perspective. However, a slight advantage may be inferred in favor of the ML models. In particular, the best scoring model came from the ML fraction. 
+
+As concluded in the original paper, algorithms do differ in their performance given a particular data set. Analysts should be aware of the variation in the results induced by picking one ore more certain models. 
+
+
+
+# Computation time
+
+
+```{r}
+model_performance2 %>%
+  mutate(time = as.numeric(time_taken)) %>% 
+  ggplot(aes(x = reorder(name, time), y = time)) +
+  geom_point(size = 4) +
+  coord_flip() +
+  theme_light() +
+  scale_y_log10() +
+  labs(y = "time in log10 [sec]", x = "model")
+```
