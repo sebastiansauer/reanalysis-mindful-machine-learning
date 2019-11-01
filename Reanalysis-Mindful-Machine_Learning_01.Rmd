@@ -6,6 +6,7 @@ output:
   html_document: 
     df_print: kable
     toc: true
+    number_sections: TRUE
 ---
 
 
@@ -67,7 +68,7 @@ knitr::opts_chunk$set(
   collapse = TRUE,
   message = FALSE,
   warning = FALSE,
-  cache = TRUE,
+  cache = FALSE,
   results = "hide",
   out.width = "70%",
   fig.align = 'center',
@@ -76,6 +77,7 @@ knitr::opts_chunk$set(
   fig.show = "hold",
   size = "tiny"
 )
+
 ```
 
 Load libs:
@@ -99,7 +101,7 @@ output_filename <- "model_performance.Rds"
 save_to_disk <- FALSE
 output_path <- paste0(here::here(),"/reanalysis-objects/")
 output_filename_nested <- "model_performance_nested.rds"
-recompute_it <- FALSE
+recompute_it <- TRUE
 ```
 
 
@@ -267,7 +269,7 @@ run_model <- function(model_name,
                     trControl = fitControl,
                     ...)
 
-  modelPred <- predict(modelOut, testing, na.action = na.pas)
+  modelPred <- predict(modelOut, testing, na.action = na.pass)
 
   modelConfMatrix <- confusionMatrix(modelPred, testing$practice)
 
@@ -319,7 +321,7 @@ modelConfMatrix$overall[c(1,2)]
 
 
 ```{r results = "hide", message = "false"}
-dummy <- run_model("gbm")
+dummy <- run_model(model = "gbm", training = training, testing = testing)
 str(dummy)
 ```
 
@@ -372,7 +374,7 @@ plot(modelOut)
 
 
 
-```{r}
+```{r error = TRUE}
 trellis.par.set(caretTheme())
 plot(modelOut, metric = "Kappa", plotType = "level",
      scales = list(x = list(rot = 90)))
@@ -385,7 +387,7 @@ plot(modelOut, metric = "Kappa", plotType = "level",
 
 
 The best candidate model (based on the training data) is this one:
-
+72
 
 ```{r}
 modelOut$bestTune
@@ -462,14 +464,16 @@ yielding 300 samples.
 
 
 
-```{r}
+```{r loop-over-models, results = "hide"}
 if (!file.exists(paste0(here(),"/reanalysis-objects/", output_filename))) {
   time <- Sys.time()
   model_performance <- model_list %>% 
-    map_dfr(run_model)
+    map_dfr(~ run_model(model = ., training = training, testing = testing))
   
   Sys.time() - time
-} else {cat("Output file already exists. Skipping re-computation. Loading output file.\n")
+  
+} else {
+  cat("Output file already exists. Skipping re-computation. Loading output file.\n")
   model_performance <- read_rds(paste0(here(),"/reanalysis-objects/", output_filename) )}
 ```
 
@@ -495,7 +499,10 @@ gbmGrid <-  expand.grid(interaction.depth = c(1, 5, 9),
                         shrinkage = 0.1,
                         n.minobsinnode = 10)
 
-performance_gbm <- run_model("gbm", tuneGrid = gbmGrid)
+performance_gbm <- run_model("gbm", 
+                             tuneGrid = gbmGrid,
+                             training = training,
+                             testing = testing)
 
 
 performance_gbm_df <- flatten(performance_gbm) %>% 
@@ -635,7 +642,7 @@ model_performance2 %>%
 #model_output <- read_rds("reanalysis-objects/model_output.rds")
 
 if (save_to_disk) {
-  write_rds(model_performance, paste0(here(),"/reanalysis-objects/", output_filename))
+  write_rds(model_performance2, paste0(here(),"/reanalysis-objects/", output_filename))
   write_rds(modelOut, paste0(here(),"/reanalysis-objects/modelOut.rds"))
   cat("Output data has been saved to disk.\n")
   cat(paste0("Path: ", paste0(here(), "/reanalysis-objects/\n")))
@@ -726,12 +733,16 @@ run_model_on_subsample <- function(trainsample, testsample, modelname, traincont
 
 ### Check
 
-```{r results = "show"}
+```{r results = "hide"}
 dummy <- run_model_on_subsample(modelname = "gbm", 
                                 trainsample = training, 
                                 testsample = testing, 
                                 traincontrol = fitControl,
                                 outcomevariable = "practice")
+```
+
+
+```{r}
 dummy
 ```
 
@@ -778,21 +789,22 @@ if (is.na(outputfilename)) {
 
 ### Check
 
-```{r}
+```{r check-glm-gbm-run-models-on-subsample}
 
-models <- list(model1 = "glm",
+models_test <- list(model1 = "glm",
                model2 = "gbm")
 
-dummy <- models %>% 
-  map_dfr( ~ run_model_on_subsample(trainsample = training,
-                                      testsample = testing,
-                                      traincontrol = fitControl,
-                                      outcomevariable = "practice"))
+dummy <- models_test %>% 
+  map_dfr( ~ run_model_on_subsample(modelname = .,
+                                    trainsample = training,
+                                    testsample = testing,
+                                    traincontrol = fitControl,
+                                    outcomevariable = "practice"))
 dummy
 
 
 #undebug(run_modellist)
-dummy <- run_modellist(modellist = models,
+dummy <- run_modellist(modellist = models_test,
                        trainsample = training,
                        testsample = testing,
                        traincontrol = fitControl,
@@ -936,7 +948,7 @@ if (!file.exists(paste0(output_path, output_filename_nested)) || recompute_it ==
 ## Reformat list to df
 
 
-```{r list-to-dfr}
+```{r list-to-dfr-nested}
 out_df <- out %>% 
   map_dfr( ~ .) 
 ```
@@ -953,7 +965,7 @@ In the original papeer, GBM uses its own search grid for hyperparamters, so we r
 
 
 ```{r again-for-gbm}
-if ((recompute_it == FALSE) &&  !exists("out_gbm")){
+if ((recompute_it == TRUE) || !exists("out_gbm")){
   
   gbmGrid <-  expand.grid(interaction.depth = c(1, 5, 9),
                         n.trees = 1:30*50,
@@ -978,7 +990,7 @@ if ((recompute_it == FALSE) &&  !exists("out_gbm")){
 ## Write to disk
 
 
-```{r write-main-out-to-disk}
+```{r write-main-out-to-disk-ested}
 if (save_to_disk == TRUE){
   write_rds(out, path = paste0(output_path, output_filename_nested))
   write_rds(out_df, path = paste0(output_path, "model_performance_nested_df.rds"))
@@ -991,7 +1003,7 @@ if (save_to_disk == TRUE){
 
 
 
-```{r list-to-dfr}
+```{r list-to-dfr-gbm-nested}
 out_gbm_df <- out_gbm %>% 
   map_dfr( ~ .) 
 
@@ -1026,7 +1038,7 @@ As concluded in the original paper, algorithms do differ in their performance gi
 
 The subsamples within one fold are not independent, eg. repetitions 1-3 of fold 1 are correlated. Computing SE and even SD may be misleading. This aspect is not (yet) accounted for.
 
-# Computation time
+
 
 # Visualize model performance of NESTED resampling scheme
 
@@ -1036,7 +1048,7 @@ The subsamples within one fold are not independent, eg. repetitions 1-3 of fold 
 Now spread it into a long format.
 
 
-```{r output-long}
+```{r output-long2}
 model_performance2_long <- out2 %>% 
   pivot_longer(cols = sensitivity:kappa, names_to = "coefficient", values_to = "value")
 model_performance2_long
@@ -1058,18 +1070,18 @@ Looks good, 60 rows per model, ie 15 subsamples by 4 coefficients per model.
 
 Similarly,
 
-```{r check-coeffs}
+```{r check-coeffs2}
 model_performance2_long %>% 
   count(coefficient)
 ```
 
 
 
-## Figure 2 (original paper)
+## Figure 2 (original paper), for nested resampling
 
 Now plot:
 
-```{r figure2, outwidth = "100%"}
+```{r figure2-nested, outwidth = "100%"}
 model_performance2_long %>%
   #dplyr::filter(coefficient != "accuracy") %>% 
   ggplot(aes(x = reorder_within(name, value, coefficient), y = value)) +
@@ -1079,7 +1091,8 @@ model_performance2_long %>%
   scale_x_reordered() +
   theme_light() +
   labs(x = "model", y = "value", coefficient = "", color = "model name") +
-  facet_wrap(~ coefficient, scales = "free")
+  facet_wrap(~ coefficient, scales = "free") +
+  theme(legend.position = "bottom")
 ```
 
 
@@ -1087,13 +1100,13 @@ model_performance2_long %>%
 In the original mode, `rf` scores best. In this re-analysis, `rf` scored third-best (measured by Cohen's Kappa in both analyses).
 
 
-## Figure 3
+## Figure 3, for nested resampling data
 
 Figure 3 in the original paper computes the average per coefficient across all models, and compares "classical" linear model results with the "machine learning" models.
 
 First compute the summary stats.
 
-```{r model-perform-sum}
+```{r model-perform-sum-nested}
 model_output2_df_sum <- model_performance2_long %>% 
   mutate(type = ifelse(name == "glm", "classical", "machine learning")) %>% 
   group_by(type, coefficient) %>% 
@@ -1107,7 +1120,7 @@ model_output2_df_sum
 Now plot.
 
 
-```{r figure3, outwidth = "100%"}
+```{r figure3-nested, outwidth = "100%"}
 model_output2_df_sum %>% 
   ggplot(aes(x = reorder(coefficient, -coefficient_mean), y = coefficient_mean)) +
   geom_errorbar(aes(ymin = coefficient_mean - coefficient_sd,
